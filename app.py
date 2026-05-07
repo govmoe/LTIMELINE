@@ -2,8 +2,8 @@ from flask import Flask, render_template, redirect, url_for, session, request, j
 from flask_session import Session
 import requests
 import uuid
-import json
 import os
+import sys
 
 try:
     from dotenv import load_dotenv
@@ -23,18 +23,249 @@ GITHUB_CLIENT_ID = os.environ.get('GITHUB_CLIENT_ID', 'test-client-id')
 GITHUB_CLIENT_SECRET = os.environ.get('GITHUB_CLIENT_SECRET', 'test-client-secret')
 GITHUB_REDIRECT_URI = os.environ.get('GITHUB_REDIRECT_URI', 'http://localhost:5000/auth/github/callback')
 
+try:
+    import cf_d1
+    DB = cf_d1.connect(os.environ.get('DATABASE_ID'))
+except ImportError:
+    DB = None
+
 DATA_FILE = 'data/users.json'
 
+def get_db():
+    if DB:
+        return DB
+    return None
+
+def init_db():
+    db = get_db()
+    if db:
+        try:
+            with open('schema.sql', 'r') as f:
+                schema = f.read()
+            statements = schema.split(';')
+            for stmt in statements:
+                stmt = stmt.strip()
+                if stmt:
+                    db.execute(stmt)
+        except Exception as e:
+            print(f"DB init error: {e}")
+
 def load_users():
+    db = get_db()
+    if db:
+        try:
+            result = db.execute("SELECT * FROM users")
+            users = {}
+            for row in result:
+                users[row['id']] = {
+                    'id': row['id'],
+                    'github_id': row['github_id'],
+                    'username': row['username'],
+                    'display_name': row['display_name'],
+                    'avatar_url': row['avatar_url']
+                }
+            return users
+        except Exception as e:
+            print(f"Load users error: {e}")
+            return {}
+    
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, 'r') as f:
             return json.load(f)
     return {}
 
 def save_users(users):
+    db = get_db()
+    if db:
+        try:
+            for user_id, user_data in users.items():
+                result = db.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+                if result:
+                    db.execute("UPDATE users SET github_id = ?, username = ?, display_name = ?, avatar_url = ? WHERE id = ?",
+                              (user_data['github_id'], user_data['username'], user_data['display_name'], user_data['avatar_url'], user_id))
+                else:
+                    db.execute("INSERT INTO users (id, github_id, username, display_name, avatar_url) VALUES (?, ?, ?, ?, ?)",
+                              (user_id, user_data['github_id'], user_data['username'], user_data['display_name'], user_data['avatar_url']))
+            return
+        except Exception as e:
+            print(f"Save users error: {e}")
+    
     os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
     with open(DATA_FILE, 'w') as f:
         json.dump(users, f, indent=2)
+
+def get_user_timelines(user_id):
+    db = get_db()
+    if db:
+        try:
+            result = db.execute("SELECT * FROM timelines WHERE user_id = ?", (user_id,))
+            timelines = []
+            for row in result:
+                events = get_timeline_events(row['id'])
+                timelines.append({
+                    'id': row['id'],
+                    'name': row['name'],
+                    'events': events
+                })
+            return timelines
+        except Exception as e:
+            print(f"Get timelines error: {e}")
+            return []
+    
+    users = load_users()
+    user = users.get(user_id)
+    return user.get('timelines', []) if user else []
+
+def get_timeline_events(timeline_id):
+    db = get_db()
+    if db:
+        try:
+            result = db.execute("SELECT * FROM events WHERE timeline_id = ? ORDER BY date", (timeline_id,))
+            events = []
+            for row in result:
+                event_type = None
+                if row['type_id']:
+                    type_result = db.execute("SELECT * FROM event_types WHERE id = ?", (row['type_id'],))
+                    if type_result:
+                        event_type = {
+                            'id': type_result[0]['id'],
+                            'name': type_result[0]['name'],
+                            'color': type_result[0]['color']
+                        }
+                events.append({
+                    'id': row['id'],
+                    'date': row['date'],
+                    'time': row['time'],
+                    'title': row['title'],
+                    'description': row['description'],
+                    'type': event_type or {'name': '未分类', 'color': '#666'}
+                })
+            return events
+        except Exception as e:
+            print(f"Get events error: {e}")
+            return []
+    
+    return []
+
+def save_timeline(user_id, timeline):
+    db = get_db()
+    if db:
+        try:
+            result = db.execute("SELECT id FROM timelines WHERE id = ?", (timeline['id'],))
+            if result:
+                db.execute("UPDATE timelines SET name = ? WHERE id = ?", (timeline['name'], timeline['id']))
+            else:
+                db.execute("INSERT INTO timelines (id, user_id, name) VALUES (?, ?, ?)",
+                          (timeline['id'], user_id, timeline['name']))
+            
+            for event in timeline['events']:
+                event_result = db.execute("SELECT id FROM events WHERE id = ?", (event['id'],))
+                type_id = event['type']['id'] if isinstance(event['type'], dict) and 'id' in event['type'] else None
+                if event_result:
+                    db.execute("UPDATE events SET date = ?, time = ?, title = ?, description = ?, type_id = ? WHERE id = ?",
+                              (event['date'], event['time'], event['title'], event['description'], type_id, event['id']))
+                else:
+                    db.execute("INSERT INTO events (id, timeline_id, date, time, title, description, type_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                              (event['id'], timeline['id'], event['date'], event['time'], event['title'], event['description'], type_id))
+            return
+        except Exception as e:
+            print(f"Save timeline error: {e}")
+    
+    users = load_users()
+    user = users.get(user_id)
+    if user:
+        timelines = user.get('timelines', [])
+        timelines = [t for t in timelines if t['id'] != timeline['id']]
+        timelines.append(timeline)
+        user['timelines'] = timelines
+        save_users(users)
+
+def get_user_event_types(user_id):
+    db = get_db()
+    if db:
+        try:
+            result = db.execute("SELECT * FROM event_types WHERE user_id = ?", (user_id,))
+            event_types = []
+            for row in result:
+                event_types.append({
+                    'id': row['id'],
+                    'name': row['name'],
+                    'color': row['color']
+                })
+            return event_types
+        except Exception as e:
+            print(f"Get event types error: {e}")
+            return []
+    
+    users = load_users()
+    user = users.get(user_id)
+    return user.get('event_types', []) if user else []
+
+def save_event_type(user_id, event_type):
+    db = get_db()
+    if db:
+        try:
+            result = db.execute("SELECT id FROM event_types WHERE id = ?", (event_type['id'],))
+            if result:
+                db.execute("UPDATE event_types SET name = ?, color = ? WHERE id = ?",
+                          (event_type['name'], event_type['color'], event_type['id']))
+            else:
+                db.execute("INSERT INTO event_types (id, user_id, name, color) VALUES (?, ?, ?, ?)",
+                          (event_type['id'], user_id, event_type['name'], event_type['color']))
+            return
+        except Exception as e:
+            print(f"Save event type error: {e}")
+    
+    users = load_users()
+    user = users.get(user_id)
+    if user:
+        event_types = user.get('event_types', [])
+        event_types = [t for t in event_types if t['id'] != event_type['id']]
+        event_types.append(event_type)
+        user['event_types'] = event_types
+        save_users(users)
+
+def delete_event_type(user_id, type_id):
+    db = get_db()
+    if db:
+        try:
+            db.execute("DELETE FROM event_types WHERE id = ? AND user_id = ?", (type_id, user_id))
+            db.execute("UPDATE events SET type_id = NULL WHERE type_id = ?", (type_id,))
+            return
+        except Exception as e:
+            print(f"Delete event type error: {e}")
+    
+    users = load_users()
+    user = users.get(user_id)
+    if user:
+        event_types = user.get('event_types', [])
+        user['event_types'] = [t for t in event_types if t['id'] != type_id]
+        save_users(users)
+
+def delete_timeline(user_id, timeline_id):
+    db = get_db()
+    if db:
+        try:
+            db.execute("DELETE FROM events WHERE timeline_id = ?", (timeline_id,))
+            db.execute("DELETE FROM timelines WHERE id = ? AND user_id = ?", (timeline_id, user_id))
+            return
+        except Exception as e:
+            print(f"Delete timeline error: {e}")
+    
+    users = load_users()
+    user = users.get(user_id)
+    if user:
+        user['timelines'] = [t for t in user.get('timelines', []) if t['id'] != timeline_id]
+        save_users(users)
+
+def delete_event(timeline_id, event_id):
+    db = get_db()
+    if db:
+        try:
+            db.execute("DELETE FROM events WHERE id = ? AND timeline_id = ?", (event_id, timeline_id))
+            return
+        except Exception as e:
+            print(f"Delete event error: {e}")
 
 def init_sample_data():
     users = load_users()
@@ -91,7 +322,14 @@ def init_sample_data():
             }
         }
         save_users(sample_users)
+        
+        for user_id, user_data in sample_users.items():
+            for event_type in user_data.get('event_types', []):
+                save_event_type(user_id, event_type)
+            for timeline in user_data.get('timelines', []):
+                save_timeline(user_id, timeline)
 
+init_db()
 init_sample_data()
 
 @app.route('/')
@@ -199,39 +437,7 @@ def require_auth(f):
 @app.route('/api/event_types', methods=['GET'])
 @require_auth
 def get_event_types(user_id):
-    users = load_users()
-    user = users.get(user_id)
-    if user:
-        event_types = user.get('event_types', [])
-        if not event_types:
-            event_types = [
-                {'id': 'milestone', 'name': '里程碑', 'color': '#667eea'},
-                {'id': 'meeting', 'name': '会议', 'color': '#10b981'},
-                {'id': 'deadline', 'name': '截止日期', 'color': '#ef4444'},
-                {'id': 'event', 'name': '活动', 'color': '#f59e0b'},
-                {'id': 'note', 'name': '备注', 'color': '#8b5cf6'}
-            ]
-            user['event_types'] = event_types
-            save_users(users)
-        return jsonify({'event_types': event_types})
-    return jsonify({'error': 'User not found'}), 404
-
-@app.route('/api/event_types', methods=['POST'])
-@require_auth
-def add_event_type(user_id):
-    users = load_users()
-    user = users.get(user_id)
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    
-    data = request.get_json()
-    name = data.get('name')
-    color = data.get('color', '#667eea')
-    
-    if not name:
-        return jsonify({'error': 'Type name is required'}), 400
-    
-    event_types = user.get('event_types', [])
+    event_types = get_user_event_types(user_id)
     if not event_types:
         event_types = [
             {'id': 'milestone', 'name': '里程碑', 'color': '#667eea'},
@@ -240,6 +446,19 @@ def add_event_type(user_id):
             {'id': 'event', 'name': '活动', 'color': '#f59e0b'},
             {'id': 'note', 'name': '备注', 'color': '#8b5cf6'}
         ]
+        for et in event_types:
+            save_event_type(user_id, et)
+    return jsonify({'event_types': event_types})
+
+@app.route('/api/event_types', methods=['POST'])
+@require_auth
+def add_event_type(user_id):
+    data = request.get_json()
+    name = data.get('name')
+    color = data.get('color', '#667eea')
+    
+    if not name:
+        return jsonify({'error': 'Type name is required'}), 400
     
     new_type = {
         'id': 'type_' + str(uuid.uuid4())[:8],
@@ -247,44 +466,25 @@ def add_event_type(user_id):
         'color': color
     }
     
-    event_types.append(new_type)
-    user['event_types'] = event_types
-    save_users(users)
+    save_event_type(user_id, new_type)
     
     return jsonify({'success': True, 'event_type': new_type})
 
 @app.route('/api/event_types/<type_id>', methods=['DELETE'])
 @require_auth
-def delete_event_type(user_id, type_id):
-    users = load_users()
-    user = users.get(user_id)
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    
-    event_types = user.get('event_types', [])
-    event_types = [t for t in event_types if t['id'] != type_id]
-    user['event_types'] = event_types
-    save_users(users)
-    
+def delete_event_type_route(user_id, type_id):
+    delete_event_type(user_id, type_id)
     return jsonify({'success': True})
 
 @app.route('/api/timelines', methods=['GET'])
 @require_auth
 def get_timelines(user_id):
-    users = load_users()
-    user = users.get(user_id)
-    if user:
-        return jsonify({'timelines': user.get('timelines', [])})
-    return jsonify({'error': 'User not found'}), 404
+    timelines = get_user_timelines(user_id)
+    return jsonify({'timelines': timelines})
 
 @app.route('/api/timelines', methods=['POST'])
 @require_auth
 def create_timeline(user_id):
-    users = load_users()
-    user = users.get(user_id)
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    
     data = request.get_json()
     name = data.get('name')
     if not name:
@@ -295,20 +495,15 @@ def create_timeline(user_id):
         'name': name,
         'events': []
     }
-    user['timelines'].append(timeline)
-    save_users(users)
+    save_timeline(user_id, timeline)
     
     return jsonify({'success': True, 'timeline': timeline})
 
 @app.route('/api/timelines/<timeline_id>', methods=['GET'])
 @require_auth
 def get_timeline(user_id, timeline_id):
-    users = load_users()
-    user = users.get(user_id)
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    
-    timeline = next((t for t in user.get('timelines', []) if t['id'] == timeline_id), None)
+    timelines = get_user_timelines(user_id)
+    timeline = next((t for t in timelines if t['id'] == timeline_id), None)
     if timeline:
         return jsonify({'timeline': timeline})
     return jsonify({'error': 'Timeline not found'}), 404
@@ -316,12 +511,8 @@ def get_timeline(user_id, timeline_id):
 @app.route('/api/timelines/<timeline_id>', methods=['PUT'])
 @require_auth
 def update_timeline(user_id, timeline_id):
-    users = load_users()
-    user = users.get(user_id)
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    
-    timeline = next((t for t in user.get('timelines', []) if t['id'] == timeline_id), None)
+    timelines = get_user_timelines(user_id)
+    timeline = next((t for t in timelines if t['id'] == timeline_id), None)
     if not timeline:
         return jsonify({'error': 'Timeline not found'}), 404
     
@@ -331,37 +522,21 @@ def update_timeline(user_id, timeline_id):
         return jsonify({'error': 'Timeline name is required'}), 400
     
     timeline['name'] = name
-    save_users(users)
+    save_timeline(user_id, timeline)
     
     return jsonify({'success': True, 'timeline': timeline})
 
 @app.route('/api/timelines/<timeline_id>', methods=['DELETE'])
 @require_auth
-def delete_timeline(user_id, timeline_id):
-    users = load_users()
-    user = users.get(user_id)
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    
-    timelines = user.get('timelines', [])
-    timeline = next((t for t in timelines if t['id'] == timeline_id), None)
-    if not timeline:
-        return jsonify({'error': 'Timeline not found'}), 404
-    
-    user['timelines'] = [t for t in timelines if t['id'] != timeline_id]
-    save_users(users)
-    
+def delete_timeline_route(user_id, timeline_id):
+    delete_timeline(user_id, timeline_id)
     return jsonify({'success': True})
 
 @app.route('/api/timelines/<timeline_id>/events', methods=['POST'])
 @require_auth
 def add_event(user_id, timeline_id):
-    users = load_users()
-    user = users.get(user_id)
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    
-    timeline = next((t for t in user.get('timelines', []) if t['id'] == timeline_id), None)
+    timelines = get_user_timelines(user_id)
+    timeline = next((t for t in timelines if t['id'] == timeline_id), None)
     if not timeline:
         return jsonify({'error': 'Timeline not found'}), 404
     
@@ -381,19 +556,15 @@ def add_event(user_id, timeline_id):
     }
     timeline['events'].append(event)
     timeline['events'].sort(key=lambda e: e['date'])
-    save_users(users)
+    save_timeline(user_id, timeline)
     
     return jsonify({'success': True, 'event': event})
 
 @app.route('/api/timelines/<timeline_id>/events/<event_id>', methods=['PUT'])
 @require_auth
 def update_event(user_id, timeline_id, event_id):
-    users = load_users()
-    user = users.get(user_id)
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    
-    timeline = next((t for t in user.get('timelines', []) if t['id'] == timeline_id), None)
+    timelines = get_user_timelines(user_id)
+    timeline = next((t for t in timelines if t['id'] == timeline_id), None)
     if not timeline:
         return jsonify({'error': 'Timeline not found'}), 404
     
@@ -410,30 +581,19 @@ def update_event(user_id, timeline_id, event_id):
         event['type'] = data['type']
     
     timeline['events'].sort(key=lambda e: e['date'])
-    save_users(users)
+    save_timeline(user_id, timeline)
     
     return jsonify({'success': True, 'event': event})
 
 @app.route('/api/timelines/<timeline_id>/events/<event_id>', methods=['DELETE'])
 @require_auth
-def delete_event(user_id, timeline_id, event_id):
-    users = load_users()
-    user = users.get(user_id)
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    
-    timeline = next((t for t in user.get('timelines', []) if t['id'] == timeline_id), None)
-    if not timeline:
-        return jsonify({'error': 'Timeline not found'}), 404
-    
-    events = timeline.get('events', [])
-    event = next((e for e in events if e['id'] == event_id), None)
-    if not event:
-        return jsonify({'error': 'Event not found'}), 404
-    
-    timeline['events'] = [e for e in events if e['id'] != event_id]
-    save_users(users)
-    
+def delete_event_route(user_id, timeline_id, event_id):
+    delete_event(timeline_id, event_id)
+    timelines = get_user_timelines(user_id)
+    timeline = next((t for t in timelines if t['id'] == timeline_id), None)
+    if timeline:
+        timeline['events'] = [e for e in timeline.get('events', []) if e['id'] != event_id]
+        save_timeline(user_id, timeline)
     return jsonify({'success': True})
 
 @app.route('/share/<user_id>/<timeline_id>')
@@ -443,7 +603,8 @@ def share_timeline(user_id, timeline_id):
     if not user:
         return jsonify({'error': 'User not found'}), 404
     
-    timeline = next((t for t in user.get('timelines', []) if t['id'] == timeline_id), None)
+    timelines = get_user_timelines(user_id)
+    timeline = next((t for t in timelines if t['id'] == timeline_id), None)
     if not timeline:
         return jsonify({'error': 'Timeline not found'}), 404
     
