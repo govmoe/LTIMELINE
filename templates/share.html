@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ timeline.name }} - LTIMELINE</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body class="share-page">
+    <div class="container">
+        <header class="share-header">
+            <div class="logo">
+                <div class="logo-icon">📅</div>
+                <h1>LTIMELINE</h1>
+            </div>
+            <div class="share-info">
+                <span class="author">分享自：{{ user.display_name }}</span>
+            </div>
+        </header>
+        
+        <main>
+            <div id="timeline" class="timeline">
+                <div class="timeline-line"></div>
+                <div class="timeline-header">
+                    <h2>{{ timeline.name }}</h2>
+                </div>
+                
+                {% if timeline.events|length == 0 %}
+                <div class="empty-state">
+                    <h3>暂无事件</h3>
+                    <p>该时间线还没有事件</p>
+                </div>
+                {% else %}
+                {% for event in timeline.events|sort(attribute='date') %}
+                <div class="timeline-item" data-description="{{ event.description|replace('\n', '\\n')|replace('"', '\\"') }}">
+                    <div class="dot-color" style="background-color: {{ event.type.color if event.type else '#666' }}"></div>
+                    <div class="date">{{ event.date }} {{ event.time if event.time else '' }}</div>
+                    <div class="title">
+                        <span>{{ event.title }}</span>
+                        <span class="type-label" style="background-color: {{ event.type.color if event.type else '#666' }};">{{ event.type.name if event.type else '未分类' }}</span>
+                    </div>
+                    {% if event.description %}
+                    <div class="description">
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+                {% endif %}
+            </div>
+        </main>
+        
+        <footer>
+            <p class="copyright">© 2026 LTIMELINE</p>
+        </footer>
+    </div>
+    
+    <script>
+        function renderMarkdown() {
+            document.querySelectorAll('.timeline-item').forEach(item => {
+                const content = item.getAttribute('data-description');
+                const descriptionEl = item.querySelector('.description');
+                
+                if (content && descriptionEl && typeof marked !== 'undefined') {
+                    try {
+                        const decodedContent = content.replace(/\\n/g, '\n');
+                        descriptionEl.innerHTML = marked.parse(decodedContent);
+                    } catch (e) {
+                        console.error('Markdown parse error:', e);
+                        descriptionEl.textContent = content;
+                    }
+                }
+            });
+        }
+        
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', renderMarkdown);
+        } else {
+            renderMarkdown();
+        }
+    </script>
+</body>
+</html>
