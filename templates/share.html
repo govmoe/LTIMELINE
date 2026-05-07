@@ -8,75 +8,139 @@
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body class="share-page">
-    <div class="container">
-        <header class="share-header">
-            <div class="logo">
-                <div class="logo-icon">📅</div>
-                <h1>LTIMELINE</h1>
+    <div class="share-container">
+        <nav class="share-nav">
+            <div class="nav-brand">
+                <span class="brand-icon">LT</span>
+                <span class="brand-name">LTIMELINE</span>
             </div>
-            <div class="share-info">
-                <span class="author">分享自：{{ user.display_name }}</span>
-            </div>
-        </header>
-        
-        <main>
-            <div id="timeline" class="timeline">
-                <div class="timeline-line"></div>
-                <div class="timeline-header">
-                    <h2>{{ timeline.name }}</h2>
+            <div class="nav-center">
+                <div class="search-box">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" id="searchInput" placeholder="搜索事件..." class="search-input">
                 </div>
+            </div>
+            <div class="nav-meta">
+                <span class="meta-item">分享自 {{ user.display_name }}</span>
+            </div>
+        </nav>
+
+        <section class="timeline-section">
+            <div class="timeline-header-card">
+                <h1 class="timeline-title">{{ timeline.name }}</h1>
+                <p class="timeline-count">{{ timeline.events|length }} 个事件</p>
+            </div>
+
+            <div class="timeline-wrapper">
+                <div class="timeline-vertical-line"></div>
                 
                 {% if timeline.events|length == 0 %}
-                <div class="empty-state">
+                <div class="empty-state-card">
+                    <div class="empty-icon">○</div>
                     <h3>暂无事件</h3>
-                    <p>该时间线还没有事件</p>
+                    <p>该时间线还没有添加任何事件</p>
                 </div>
                 {% else %}
                 {% for event in timeline.events|sort(attribute='date') %}
-                <div class="timeline-item" data-description="{{ event.description|replace('\n', '\\n')|replace('"', '\\"') }}">
-                    <div class="dot-color" style="background-color: {{ event.type.color if event.type else '#666' }}"></div>
-                    <div class="date">{{ event.date }} {{ event.time if event.time else '' }}</div>
-                    <div class="title">
-                        <span>{{ event.title }}</span>
-                        <span class="type-label" style="background-color: {{ event.type.color if event.type else '#666' }};">{{ event.type.name if event.type else '未分类' }}</span>
+                <article class="event-card" data-search="{{ event.title }} {{ event.description }} {{ event.type.name if event.type else '未分类' }}">
+                    <div class="event-dot" style="background-color: {{ event.type.color if event.type else '#666' }}"></div>
+                    
+                    <div class="event-content">
+                        <div class="event-meta">
+                            <time class="event-date">{{ event.date }} {{ event.time if event.time else '' }}</time>
+                            <span class="event-type" style="background-color: {{ event.type.color if event.type else '#666' }};">{{ event.type.name if event.type else '未分类' }}</span>
+                        </div>
+                        
+                        <h3 class="event-title">{{ event.title }}</h3>
+                        
+                        {% if event.description %}
+                        <div class="event-description" data-content="{{ event.description|replace('\n', '\\n')|replace('"', '\\"') }}">
+                            {{ event.description }}
+                        </div>
+                        {% endif %}
                     </div>
-                    {% if event.description %}
-                    <div class="description">
-                    </div>
-                    {% endif %}
-                </div>
+                </article>
                 {% endfor %}
                 {% endif %}
             </div>
-        </main>
-        
-        <footer>
-            <p class="copyright">© 2026 LTIMELINE</p>
+        </section>
+
+        <footer class="share-footer">
+            <div class="footer-content">
+                <span class="footer-brand">LTIMELINE</span>
+                <span class="footer-copyright">© 2026</span>
+            </div>
         </footer>
     </div>
-    
+
     <script>
         function renderMarkdown() {
-            document.querySelectorAll('.timeline-item').forEach(item => {
-                const content = item.getAttribute('data-description');
-                const descriptionEl = item.querySelector('.description');
-                
-                if (content && descriptionEl && typeof marked !== 'undefined') {
+            document.querySelectorAll('.event-description').forEach(el => {
+                const content = el.getAttribute('data-content');
+                if (content && typeof marked !== 'undefined') {
                     try {
-                        const decodedContent = content.replace(/\\n/g, '\n');
-                        descriptionEl.innerHTML = marked.parse(decodedContent);
+                        el.innerHTML = marked.parse(content);
                     } catch (e) {
                         console.error('Markdown parse error:', e);
-                        descriptionEl.textContent = content;
                     }
                 }
             });
         }
-        
+
+        function initSearch() {
+            const searchInput = document.getElementById('searchInput');
+            if (!searchInput) return;
+
+            searchInput.addEventListener('input', function() {
+                const query = this.value.toLowerCase().trim();
+                const eventCards = document.querySelectorAll('.event-card');
+                let visibleCount = 0;
+
+                eventCards.forEach(card => {
+                    const searchText = card.getAttribute('data-search') || '';
+                    if (searchText.toLowerCase().includes(query)) {
+                        card.style.display = 'block';
+                        visibleCount++;
+                    } else {
+                        card.style.display = 'none';
+                    }
+                });
+
+                const emptyState = document.querySelector('.empty-state-card');
+                const timelineWrapper = document.querySelector('.timeline-wrapper');
+                
+                if (query && visibleCount === 0) {
+                    if (!emptyState) {
+                        const newEmptyState = document.createElement('div');
+                        newEmptyState.className = 'empty-state-card';
+                        newEmptyState.innerHTML = `
+                            <div class="empty-icon">○</div>
+                            <h3>未找到匹配的事件</h3>
+                            <p>没有找到包含 "${query}" 的事件</p>
+                        `;
+                        timelineWrapper.appendChild(newEmptyState);
+                    } else {
+                        emptyState.innerHTML = `
+                            <div class="empty-icon">○</div>
+                            <h3>未找到匹配的事件</h3>
+                            <p>没有找到包含 "${query}" 的事件</p>
+                        `;
+                        emptyState.style.display = 'block';
+                    }
+                } else if (emptyState) {
+                    emptyState.style.display = 'none';
+                }
+            });
+        }
+
         if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', renderMarkdown);
+            document.addEventListener('DOMContentLoaded', function() {
+                renderMarkdown();
+                initSearch();
+            });
         } else {
             renderMarkdown();
+            initSearch();
         }
     </script>
 </body>

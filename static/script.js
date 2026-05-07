@@ -37,6 +37,8 @@ class TimelineApp {
         
         document.getElementById('copyShareBtn').addEventListener('click', () => this.copyShareLink());
         
+        document.getElementById('searchInput')?.addEventListener('input', (e) => this.searchEvents(e.target.value));
+        
         window.addEventListener('click', (e) => {
             if (e.target.classList.contains('modal')) {
                 this.closeModals();
@@ -345,13 +347,22 @@ class TimelineApp {
         const timelineContainer = document.getElementById('timeline');
         timelineContainer.innerHTML = `
             <div class="timeline-line"></div>
-            <div class="timeline-header">
-                <h2>${this.currentTimeline.name}</h2>
-                <button id="addEventBtn" class="add-btn">添加事件</button>
+            <div class="timeline-header" id="timelineHeader">
+                <div class="timeline-header-content">
+                    <h2 id="timelineName">${this.currentTimeline.name}</h2>
+                    <div class="timeline-header-actions">
+                        <div class="search-box">
+                            <span class="search-icon">🔍</span>
+                            <input type="text" id="searchInput" placeholder="搜索事件..." class="search-input">
+                        </div>
+                        <button id="addEventBtn" class="add-btn">添加事件</button>
+                    </div>
+                </div>
             </div>
         `;
         
         document.getElementById('addEventBtn').addEventListener('click', () => this.openEventModal());
+        document.getElementById('searchInput').addEventListener('input', (e) => this.searchEvents(e.target.value));
         
         if (this.currentTimeline.events.length === 0) {
             const emptyState = document.createElement('div');
@@ -366,8 +377,10 @@ class TimelineApp {
         
         this.currentTimeline.events.forEach(event => {
             const eventType = event.type || { name: '未分类', color: event.color || '#666' };
+            const searchText = `${event.title} ${event.description || ''} ${eventType.name}`;
             const item = document.createElement('div');
             item.className = 'timeline-item';
+            item.setAttribute('data-search', searchText);
             item.innerHTML = `
                 <div class="dot-color" style="background-color: ${eventType.color}"></div>
                 <div class="date">${this.formatDate(event.date)} ${event.time ? event.time : ''}</div>
@@ -387,6 +400,40 @@ class TimelineApp {
             
             timelineContainer.appendChild(item);
         });
+    }
+    
+    searchEvents(query) {
+        const queryLower = query.toLowerCase().trim();
+        const eventItems = document.querySelectorAll('.timeline-item');
+        let visibleCount = 0;
+        
+        eventItems.forEach(item => {
+            const searchText = item.getAttribute('data-search') || '';
+            if (searchText.toLowerCase().includes(queryLower)) {
+                item.style.display = 'block';
+                visibleCount++;
+            } else {
+                item.style.display = 'none';
+            }
+        });
+        
+        const timelineContainer = document.getElementById('timeline');
+        let emptyState = timelineContainer.querySelector('.empty-state');
+        
+        if (queryLower && visibleCount === 0) {
+            if (!emptyState) {
+                emptyState = document.createElement('div');
+                emptyState.className = 'empty-state';
+                timelineContainer.appendChild(emptyState);
+            }
+            emptyState.innerHTML = `
+                <h3>未找到匹配的事件</h3>
+                <p>没有找到包含 "${queryLower}" 的事件</p>
+            `;
+            emptyState.style.display = 'block';
+        } else if (emptyState) {
+            emptyState.style.display = 'none';
+        }
     }
 
     formatDate(dateStr) {
@@ -621,10 +668,11 @@ class TimelineApp {
             return;
         }
         
-        const embedCode = `<iframe src="${window.location.origin}/share/${this.currentUser.id}/${this.currentTimeline.id}" width="100%" height="600" frameborder="0"></iframe>`;
+        const userId = this.currentUser.username || this.currentUser.display_name || this.currentUser.id;
+        const embedCode = `<iframe src="${window.location.origin}/share/${userId}/${this.currentTimeline.id}" width="100%" height="600" frameborder="0"></iframe>`;
         document.getElementById('embedCode').value = embedCode;
         
-        const shareLink = `${window.location.origin}/share/${this.currentUser.id}/${this.currentTimeline.id}`;
+        const shareLink = `${window.location.origin}/share/${userId}/${this.currentTimeline.id}`;
         document.getElementById('shareLink').value = shareLink;
     }
 

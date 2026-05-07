@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LTIMELINE</title>
+    <title>时间线 - Timeline</title>
     <link rel="stylesheet" href="/static/styles.css">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
@@ -12,7 +12,7 @@
         <header>
             <div class="logo">
                 <div class="logo-icon">📅</div>
-                <h1>LTIMELINE</h1>
+                <h1>时间线</h1>
             </div>
             <div class="auth-section" id="authSection">
                 <a href="/auth/github" class="login-btn">
@@ -52,6 +52,18 @@
 
         <div id="timeline" class="timeline">
             <div class="timeline-line"></div>
+            <div class="timeline-header" id="timelineHeader" style="display: none;">
+                <div class="timeline-header-content">
+                    <h2 id="timelineName">时间线名称</h2>
+                    <div class="timeline-header-actions">
+                        <div class="search-box">
+                            <span class="search-icon">🔍</span>
+                            <input type="text" id="searchInput" placeholder="搜索事件..." class="search-input">
+                        </div>
+                        <button id="addEventBtn" class="add-event-btn">添加事件</button>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div id="modal" class="modal">
